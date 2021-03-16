@@ -238,8 +238,8 @@ else
     %plot(my_alg('wL_all'));
     figure(4);
     plot(my_alg('reflectance raw')/(-500)+5);
-    figure(5);
-    plot(my_alg('sonar'));
+    %figure(5);
+    %plot(my_alg('sonar'));
     
     my_alg('sonar')
 end
