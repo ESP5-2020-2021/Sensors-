@@ -1,0 +1,248 @@
+function my_alg = example_control(my_alg, robot)
+
+    function set_forward_mode()
+         my_alg('mode')= 'forward';
+         my_alg('wR_set') = my_alg('max_speed');
+         my_alg('wL_set') = my_alg('max_speed');
+         my_alg('dis_left')= my_alg('dis'); % resetting distance to move
+    end
+    
+    function update_distance_and_position()
+        %calculating distance covered in time "dt"
+        average_w= (my_alg('right encoder')+my_alg('left encoder'))/2;
+        dS= dt*average_w* my_alg('wheel_radius');
+                   
+        %substracting the distance covered in time "dt" from the total distance to be covered
+        my_alg('dis_left')= my_alg('dis_left')- dS;
+        my_alg('position')= my_alg('position')+ [dS*cos(my_alg('angle')) dS*sin(my_alg('angle'))];
+    end
+
+    function update_angle()
+         %calculating delta_angle
+         difference= (my_alg('right encoder')-my_alg('left encoder'))*my_alg('wheel_radius');
+         d_alpha= difference/(my_alg('WheelBase')*2);
+                    
+         my_alg('angle')= my_alg('angle')+d_alpha*dt;
+    end
+    
+    function setting_turning(how_to_turn)
+        switch how_to_turn
+            case 'around'
+                my_alg('going_first') =false;        %marking that a square was made
+                new_mode= 'turn_left';
+                my_alg('mode')= 'turn_around'; %turn around when starting position is reached for the first time
+                my_alg('angle_to_turn')= my_alg('angle')+ 2*my_alg('turning_angle'); %180 degree turn
+                turning_speed= my_alg('turn_control');
+            case 'left'
+                new_mode= 'turn_left';
+                my_alg('angle_to_turn')= my_alg('angle')+ my_alg('turning_angle'); %90 degree turn
+                turning_speed= my_alg('turn_control');
+            case 'right'
+                new_mode= 'turn_right';
+                my_alg('angle_to_turn')= my_alg('angle')- my_alg('turning_angle'); %90 degree turn
+                turning_speed= -my_alg('turn_control'); % to turn right, the right and left wheels should turn in the opposite direction they did for a left turn
+        end
+        my_alg('mode')= new_mode;
+        %direction of rotation depends on {my_alg('turn_control')} sign
+        my_alg('wR_set') = turning_speed;
+        my_alg('wL_set') = -turning_speed; %both wheels turn in opposite directions at angular speed = 1
+        %this is a more accurate turn as the centre of rotation
+        %would be the centre of the buggy.                                     
+    end
+   
+% This function implements velocity controllers for both wheels 
+% and applies the desired setpoints for a specified amount of time.
+%
+% with reference to control example file by : Mohamed Mustafa, August 2020
+% -------------------------------------------------------------------------
+%
+% Reading data from sensors (if present on the robot)
+%    my_alg('right encoder') - right encoder velocity
+%    my_alg('left encoder')  - left encoder velocity
+%    my_alg('reflectance')   - reflectance sensor output value
+%    my_alg('reflectance raw')   - reflectance sensor raw output values
+%    my_alg('sonar')         - sonar measured distance (m)
+% 
+% Sending controls to actuators (if present on the robot)
+%    my_alg('right motor')   - sets the right motor input signal (pwm or angular velocity)
+%    my_alg('left motor')    - sets the left motor input signal (pwm or angular velocity)
+%    my_alg('servo motor')   - sets the servomotor angle (radians)
+% -------------------------------------------------------------------------
+
+if my_alg('is_first_time')
+    %% Setup initial parameters here
+    %initializtion of a virables
+    %all virables are here, so if you want to change some values/variables you only
+    %need to change them here
+    
+    % Initialise wheel angular velocity contollers
+    my_alg('servo motor')= 1.134; %the maximum angle is 60 degrees for the sonar sensor
+    my_alg('max_w') = 14; %max angular speed when a pwm voltage signal of 1 is applied.
+    % Initialise wheel angular velocity contollers
+    my_alg('max_speed') = 3;   %angular speed when moving 'forward'
+    my_alg('wR_set') = my_alg('max_speed');
+    my_alg('wL_set') = my_alg('max_speed');
+    
+    my_alg('uR') = (my_alg('wR_set')/my_alg('max_w'))*1; %For right wheel: calculating pwm signal as a ratio of the angular speed to max angular speed
+    my_alg('uL') = (my_alg('wL_set')/my_alg('max_w'))*1; %For left wheel: same as line above
+    
+    my_alg('dis')= 0.5;                 %distance to be covered
+    my_alg('dis_left')= my_alg('dis');
+    my_alg('position')= [0 0];       %position of the robot
+    my_alg('angle')= 0;              %angle theta in the simulator
+    my_alg('wheel_radius')= 0.0505;  %radious of the robot's wheel
+    my_alg('turn_control')= 12;       %speed when turning
+    my_alg('angle_to_turn')=0;
+    my_alg('going_first')= true;        % true if square hasnt been made, false otherwise
+    my_alg('turning_angle')= 3.14/2;      % 90 degree angle
+    my_alg('position_error')= 0.4;      % to account for position inaccuracy in Matlab
+    my_alg('WheelBase')= 0.083;         %wheel base from the user manual
+    
+    my_alg('KP')= 0.008;
+    my_alg('KI')= 0.24*my_alg('KP');
+    my_alg('KD')= 0.15*my_alg('KP');
+    my_alg('prev_E_R')= my_alg('uR');
+    my_alg('prev_E_L')= my_alg('uL');
+    
+    my_alg('dc_motor_signal_mode') = 'voltage_pwm';     % change if necessary to 'omega_setpoint'
+    
+    my_alg('mode')= 'forward'; %initialise mode switch case to be forward
+    
+    %i = 0; %inner loop counter
+    
+    
+    % Initialise vectors for saving velocity data
+    my_alg('wR_all') = [];
+    my_alg('wL_all') = [];
+        
+    % Initialise time parameters
+    my_alg('t_sampling') = 0.03;
+    my_alg('t_loop') = tic;
+    my_alg('t_finish') = 1;
+end
+
+%% Loop code runs here  for algorithm finish time
+time = toc(my_alg('tic'));      % Get time since start of session
+if time < my_alg('t_finish')    % Check for algorithm finish time
+    
+    dt = toc(my_alg('t_loop'));
+    
+    if dt>my_alg('t_sampling')  % execute code when desired sampling time is reached
+        my_alg('t_loop') = tic;
+        
+        % Apply pwm signal
+        my_alg('right motor') = my_alg('uR');
+        my_alg('left motor') = my_alg('uL');
+
+        %Right wheel controller %%%%%%%%%%%%%%%%%
+            %calculating the error between the desired angular speed and the measured angular speed 
+            %by the encoders for the right wheel:
+        Error_R = (my_alg('wR_set') - my_alg('right encoder')); %this is a P controller with the constant Kp being 0.009
+        integ_R= Error_R*dt;
+        diff_R = Error_R- my_alg('prev_E_R');
+        deriv_R = diff_R/dt;
+        change_R= my_alg('KP')*Error_R+ my_alg('KD')*deriv_R+ my_alg('KI')*integ_R;
+        my_alg('uR') = my_alg('uR') + change_R; %adding the error value to the next pwm signal to be sent
+        my_alg('prev_E_R')=  Error_R;
+        
+        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%;%%%%%%
+
+        %Left wheel controller %%%%%%%%%%%%%%%%%%%
+            %same calculations but for the left wheel:
+        Error_L = (my_alg('wL_set') - my_alg('left encoder'));
+        integ_L= Error_L*dt;
+        diff_L = Error_L- my_alg('prev_E_L');
+        deriv_L = diff_L/dt;
+        change_L= my_alg('KP')*Error_L+ my_alg('KD')*deriv_L+ my_alg('KI')*integ_L;
+        my_alg('uL') = my_alg('uL') + change_L;
+        my_alg('prev_E_L')=  Error_L;
+        
+
+        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+        
+        %switch case is much more faster than a bunch of if statements
+         switch my_alg('mode')
+            
+            case 'forward'
+                if my_alg('dis_left')>0      %checking if the robot moved the wanted distance
+                    update_distance_and_position();
+                else
+                    A= my_alg('position');
+                    E= my_alg('position_error');
+                    
+                    if ((A(1,1)> -E && A(1,1)< E) && (A(1,2)> -E && A(1,2)< E)) %checking if robot is in starting position +-E
+                        if my_alg('going_first')
+                             setting_turning('around'); %turn around when starting position is reached for the first time
+                        else 
+                            my_alg('mode')= 'stop'; %stops if starting position is reched for the second time
+                        end
+                        
+                    elseif my_alg('going_first')  %if square hasn't been made -> turning left
+                        setting_turning('left');
+                           
+                    else  %if square was made -> turning right
+                        setting_turning('right');
+                    end
+
+                    %%%%%%%%%%%%%%%%%%%%
+                    %outputs for debugging
+                    my_alg('position')
+                    my_alg('angle')
+                    %%%%%%%%%%%%%%%%%%%%                                                     
+                end
+                
+            case 'turn_left'
+                if my_alg('angle') < my_alg('angle_to_turn')
+                    update_angle();
+                else 
+                   set_forward_mode();
+                end
+             
+            case 'turn_right'
+                if my_alg('angle') > my_alg('angle_to_turn')
+                    update_angle();
+                else
+                    set_forward_mode();
+                end   
+                
+            case 'stop'
+                my_alg('wR_set') = 0;
+                my_alg('wL_set') = 0;          
+        end
+        
+        % Save data for ploting
+        my_alg('wR_all') = [my_alg('wR_all') my_alg('right encoder')];
+        my_alg('wL_all') = [my_alg('wL_all') my_alg('left encoder')];
+    end
+else
+    %% Finish algorithm and plot results
+    
+    % Stop motors
+    my_alg('right motor') = 0;
+    my_alg('left motor') = 0;
+    % Stop session
+    my_alg('is_done') = true;
+    
+    % Plot saved velocities for right and left wheel
+    % Stop motors
+    my_alg('right motor') = 0;
+    my_alg('left motor') = 0;
+    % Stop session
+    my_alg('is_done') = true;
+    
+    % Plot saved velocities for right and left wheel
+    %figure(2);
+    %plot(my_alg('wR_all'));
+    %hold on
+    %figure(3);
+    %plot(my_alg('wL_all'));
+    figure(4);
+    plot(my_alg('reflectance raw')/(-500)+5);
+    figure(5);
+    plot(my_alg('sonar'));
+    
+    my_alg('sonar')
+end
+
+return
+end
